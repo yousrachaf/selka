@@ -10,7 +10,7 @@ const copied = ref(false);
 
 const joinLink = computed(() =>
   result.value?.join_code
-    ? `${window.location.origin}/g/${result.value.join_code}`
+    ? `${window.location.origin}/#/g/${result.value.join_code}`
     : ""
 );
 
