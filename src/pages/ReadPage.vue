@@ -13,6 +13,8 @@ const completing = ref(false);
 const completed = ref(false);
 const ayahs = ref([]);
 const range = ref(null);
+const bookmark = ref(null);
+const bookmarkNotice = ref("");
 
 const hizbStart = computed(() => Number(route.query.hizb_start));
 const hizbEnd = computed(() => Number(route.query.hizb_end || hizbStart.value));
@@ -25,6 +27,50 @@ const title = computed(() => {
   }
   return `Lecture — Hizb ${range.value.startHizb} a ${range.value.endHizb}`;
 });
+
+const bookmarkKey = computed(() => {
+  if (groupCode.value) return `selka:bookmark:${groupCode.value}`;
+  return `selka:bookmark:hizb:${hizbStart.value}-${hizbEnd.value}`;
+});
+
+function loadBookmark() {
+  try {
+    const raw = localStorage.getItem(bookmarkKey.value);
+    bookmark.value = raw ? JSON.parse(raw) : null;
+  } catch {
+    bookmark.value = null;
+  }
+}
+
+function saveBookmark(surah, ayah) {
+  const payload = {
+    surah,
+    ayah,
+    hizbStart: hizbStart.value,
+    hizbEnd: hizbEnd.value,
+    savedAt: new Date().toISOString(),
+  };
+  localStorage.setItem(bookmarkKey.value, JSON.stringify(payload));
+  bookmark.value = payload;
+  bookmarkNotice.value = "Marque-page enregistre ✓";
+  setTimeout(() => {
+    bookmarkNotice.value = "";
+  }, 1500);
+}
+
+function clearBookmark() {
+  localStorage.removeItem(bookmarkKey.value);
+  bookmark.value = null;
+}
+
+function scrollToBookmark() {
+  if (!bookmark.value) return;
+  const id = `ayah-${bookmark.value.surah}-${bookmark.value.ayah}`;
+  const el = document.getElementById(id);
+  if (el) {
+    el.scrollIntoView({ behavior: "smooth", block: "center" });
+  }
+}
 
 async function loadReadRange() {
   error.value = "";
@@ -72,6 +118,8 @@ async function loadReadRange() {
       end_surah: endEntry.end_surah,
       end_ayah: endEntry.end_ayah,
     };
+
+    loadBookmark();
 
     const startFilter = `surah.gt.${range.value.start_surah},and(surah.eq.${range.value.start_surah},ayah.gte.${range.value.start_ayah})`;
     const endFilter = `surah.lt.${range.value.end_surah},and(surah.eq.${range.value.end_surah},ayah.lte.${range.value.end_ayah})`;
@@ -146,16 +194,54 @@ watch(
 
       <p class="title">{{ title }}</p>
 
+      <div class="bookmark-card">
+        <p class="bookmark-title">📌 Marque-page</p>
+        <p class="muted">
+          Clique sur le numero d'une ayah pour enregistrer un marque-page et
+          reprendre ta lecture plus tard exactement au meme endroit.
+        </p>
+        <p v-if="bookmarkNotice" class="bookmark-notice">{{ bookmarkNotice }}</p>
+        <div v-if="bookmark" class="bookmark-actions">
+          <p class="muted">
+            Derniere lecture : Sourate {{ bookmark.surah }} — Ayah
+            {{ bookmark.ayah }}
+          </p>
+          <div class="bookmark-buttons">
+            <button class="secondary brown" type="button" @click="scrollToBookmark">
+              Reprendre la lecture
+            </button>
+            <button class="secondary ghost" type="button" @click="clearBookmark">
+              Supprimer le marque-page
+            </button>
+          </div>
+        </div>
+      </div>
+
       <p v-if="loading" class="muted">Chargement...</p>
       <p v-if="error" class="error">{{ error }}</p>
 
       <div v-if="ayahs.length" class="quran-section">
         <div class="quran-flow" dir="rtl" lang="ar">
           <template v-for="a in ayahs" :key="`${a.surah}:${a.ayah}`">
-            <span class="ayah-text">{{ a.text_ar }}</span>
-            <span class="ayah-badge">
-              <span class="ayah-number">{{ a.ayah }}</span>
+            <span
+              class="ayah-text"
+              :id="`ayah-${a.surah}-${a.ayah}`"
+              :class="{
+                'is-bookmarked':
+                  bookmark &&
+                  bookmark.surah === a.surah &&
+                  bookmark.ayah === a.ayah,
+              }"
+            >
+              {{ a.text_ar }}
             </span>
+            <button
+              class="ayah-badge"
+              type="button"
+              @click="saveBookmark(a.surah, a.ayah)"
+            >
+              <span class="ayah-number">{{ a.ayah }}</span>
+            </button>
           </template>
         </div>
       </div>
@@ -247,6 +333,9 @@ watch(
   margin: 0 10px;
   vertical-align: middle;
   user-select: none;
+  cursor: pointer;
+  border: none;
+  background-color: transparent;
 }
 
 .ayah-number {
@@ -254,6 +343,12 @@ watch(
   color: #3a2a20;
   font-weight: 600;
   transform: translateY(-1px);
+}
+
+.is-bookmarked {
+  background: rgba(124, 74, 46, 0.14);
+  border-radius: 8px;
+  padding: 2px 4px;
 }
 
 @media (max-width: 640px) {
@@ -292,6 +387,38 @@ watch(
   border-color: transparent;
   background: var(--accent);
   color: #ffffff;
+}
+
+.bookmark-card {
+  margin: 12px 0 18px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.75);
+  display: grid;
+  gap: 8px;
+}
+
+.bookmark-title {
+  margin: 0;
+  font-weight: 600;
+}
+
+.bookmark-notice {
+  margin: 0;
+  color: #1e6f3c;
+  font-size: 13px;
+}
+
+.bookmark-actions {
+  display: grid;
+  gap: 8px;
+}
+
+.bookmark-buttons {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
 }
 
 .read-footer {

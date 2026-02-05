@@ -54,7 +54,7 @@ async function copyLink() {
 <template>
   <main class="page">
     <section class="card">
-      <h1 class="title">Creer une سلكة</h1>
+      <h1 class="title">Creer un groupe</h1>
 
       <label class="label" for="groupName">Nom du groupe</label>
       <input

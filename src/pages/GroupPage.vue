@@ -330,6 +330,11 @@ watch(code, () => {
       </div>
 
       <div v-if="group" class="content">
+        <div class="top-actions">
+          <button class="secondary ghost" type="button" @click="router.push('/')">
+            Creer un nouveau groupe 
+          </button>
+        </div>
         <h1 class="title">{{ group.name }}</h1>
 
         <div class="progress">
@@ -338,10 +343,25 @@ watch(code, () => {
           </div>
           <div class="muted">{{ progressPercent }}%</div>
         </div>
+        <div class="progress-bar" aria-hidden="true">
+          <div
+            class="progress-fill"
+            :style="{ width: `${progressPercent}%` }"
+          ></div>
+        </div>
         <p class="muted">Il reste {{ remaining }} hizb</p>
 
         <div v-if="isFinished" class="finish">
-          <p class="finish-title">الحمد لله، تمت الختمة</p>
+          <div class="finish-header">
+            <p class="finish-title">الحمد لله، تمت الختمة</p>
+            <button
+              class="secondary ghost"
+              type="button"
+              @click="router.push('/khatm')"
+            >
+              Duaa khatm
+            </button>
+          </div>
           <p class="muted">
             Allahoumma taqabbal minna wa zidna hubban wa thabata.
           </p>
@@ -489,6 +509,21 @@ watch(code, () => {
   margin-bottom: 18px;
 }
 
+.progress-bar {
+  height: 8px;
+  border-radius: 999px;
+  background: rgba(60, 60, 60, 0.12);
+  overflow: hidden;
+  margin: -8px 0 16px;
+}
+
+.progress-fill {
+  height: 100%;
+  background: #1e6f3c;
+  width: 0%;
+  transition: width 0.2s ease;
+}
+
 .finish {
   margin-top: 14px;
   padding: 12px 14px;
@@ -501,6 +536,19 @@ watch(code, () => {
   margin: 0 0 6px;
   font-size: 16px;
   font-weight: 700;
+}
+
+.finish-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.top-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 8px;
 }
 
 .landing {
