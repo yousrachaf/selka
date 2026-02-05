@@ -51,6 +51,7 @@ export async function listParticipations(groupId) {
     .from("participations")
     .select("*")
     .eq("group_id", groupId)
+    .is("cancelled_at", null)
     .order("created_at", { ascending: true });
 
   if (error) {
@@ -74,6 +75,7 @@ export function computeNextSlot(participations, size, total = 60) {
 
   const taken = new Set();
   for (const p of participations || []) {
+    if (p?.cancelled_at) continue;
     const start = Number(p.start_hizb);
     const end = Number(p.end_hizb);
     if (Number.isFinite(start) && Number.isFinite(end)) {
@@ -103,6 +105,7 @@ export function computeNextSlot(participations, size, total = 60) {
 export async function joinGroup(
   groupId,
   displayName,
+  nameInitial,
   hizbTaken,
   startHizb,
   endHizb
@@ -119,6 +122,7 @@ export async function joinGroup(
   const payload = {
     group_id: groupId,
     display_name: displayName,
+    name_initial: nameInitial,
     hizb_taken: normalizedSize,
     start_hizb: start,
     end_hizb: end,
@@ -137,6 +141,26 @@ export async function joinGroup(
   return data;
 }
 
+export async function findByName(groupId, displayName, nameInitial) {
+  const { data, error } = await supabase
+    .from("participations")
+    .select(
+      "id, display_name, name_initial, start_hizb, end_hizb, completed"
+    )
+    .eq("group_id", groupId)
+    .ilike("display_name", displayName)
+    .ilike("name_initial", nameInitial)
+    .order("created_at", { ascending: true });
+
+  if (error) {
+    throw new Error(
+      toErrorMessage("Impossible de verifier le nom", error)
+    );
+  }
+
+  return data ?? [];
+}
+
 export async function markCompleted(participationId, editToken) {
   const { data, error } = await supabase
     .from("participations")
@@ -149,6 +173,42 @@ export async function markCompleted(participationId, editToken) {
   if (error) {
     throw new Error(
       toErrorMessage("Impossible de marquer la participation terminée", error)
+    );
+  }
+
+  return data;
+}
+
+export async function deleteParticipation(participationId, editToken) {
+  const { data, error } = await supabase
+    .from("participations")
+    .delete()
+    .eq("id", participationId)
+    .eq("edit_token", editToken)
+    .select("*")
+    .single();
+
+  if (error) {
+    throw new Error(
+      toErrorMessage("Impossible de supprimer la participation", error)
+    );
+  }
+
+  return data;
+}
+
+export async function cancelParticipation(participationId, editToken) {
+  const { data, error } = await supabase
+    .from("participations")
+    .update({ cancelled_at: new Date().toISOString() })
+    .eq("id", participationId)
+    .eq("edit_token", editToken)
+    .select("*")
+    .single();
+
+  if (error) {
+    throw new Error(
+      toErrorMessage("Impossible d'annuler la participation", error)
     );
   }
 

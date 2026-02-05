@@ -43,6 +43,10 @@ function loadBookmark() {
 }
 
 function saveBookmark(surah, ayah) {
+  const ok = window.confirm(
+    `Enregistrer le marque-page sur Sourate ${surah} — Ayah ${ayah} ?`
+  );
+  if (!ok) return;
   const payload = {
     surah,
     ayah,

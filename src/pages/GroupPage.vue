@@ -3,9 +3,11 @@ import { computed, onMounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import {
   computeNextSlot,
+  cancelParticipation,
   finishGroup,
   getGroupByCode,
   joinGroup,
+  findByName,
   listParticipations,
   markCompleted,
 } from "../services/selkaApi";
@@ -19,12 +21,18 @@ const error = ref("");
 const notFound = ref(false);
 
 const displayName = ref("");
+const nameInitial = ref("");
 const hizbTaken = ref("1");
 const joining = ref(false);
 const completing = ref(false);
 const finishing = ref(false);
 const showReadPrompt = ref(false);
 const readPromptRange = ref(null);
+const canceling = ref(false);
+const notice = ref("");
+const confirmMatch = ref(null);
+const showConfirm = ref(false);
+const recognized = ref(null);
 
 const code = computed(() => String(route.params.code || "").trim());
 
@@ -142,6 +150,14 @@ async function loadGroupAndParticipations() {
     } catch {
       localParticipation.value = null;
     }
+    try {
+      const rawRecognized = localStorage.getItem(
+        `selka:recognized:${g.join_code}`
+      );
+      recognized.value = rawRecognized ? JSON.parse(rawRecognized) : null;
+    } catch {
+      recognized.value = null;
+    }
     participations.value = await listParticipations(g.id);
     await maybeFinishGroup();
   } catch (err) {
@@ -162,12 +178,69 @@ async function loadGroupAndParticipations() {
   }
 }
 
+function normalizedInitial() {
+  return nameInitial.value.trim().toUpperCase();
+}
+
+function isValidInitial() {
+  const value = normalizedInitial();
+  return value.length >= 1 && value.length <= 3;
+}
+
+async function doJoinWithSlot(slot, message) {
+  const created = await joinGroup(
+    group.value.id,
+    displayName.value.trim(),
+    normalizedInitial(),
+    Number(hizbTaken.value),
+    slot.start,
+    slot.end
+  );
+  localStorage.setItem(
+    `selka:${group.value.join_code}:participation`,
+    JSON.stringify({
+      participationId: created.id,
+      editToken: created.edit_token,
+    })
+  );
+  localStorage.setItem(
+    `selka:${group.value.join_code}:display_name`,
+    displayName.value.trim()
+  );
+  localParticipation.value = {
+    participationId: created.id,
+    editToken: created.edit_token,
+  };
+  displayName.value = "";
+  nameInitial.value = "";
+  hizbTaken.value = "1";
+  participations.value = await listParticipations(group.value.id);
+  readPromptRange.value = { start: slot.start, end: slot.end };
+  showReadPrompt.value = true;
+  if (message) notice.value = message;
+}
+
 async function onJoin() {
   if (!group.value || joining.value) return;
   if (!displayName.value.trim() || !hizbTaken.value) return;
+  if (!isValidInitial()) {
+    error.value = "Initiale invalide (1 a 3 caracteres).";
+    return;
+  }
   joining.value = true;
   error.value = "";
+  notice.value = "";
   try {
+    const matches = await findByName(
+      group.value.id,
+      displayName.value.trim(),
+      normalizedInitial()
+    );
+    if (matches.length > 0) {
+      confirmMatch.value = matches[0];
+      showConfirm.value = true;
+      return;
+    }
     const current = await listParticipations(group.value.id);
     const slot = computeNextSlot(
       current,
@@ -177,33 +250,7 @@ async function onJoin() {
     if (slot.end > group.value.total_hizb) {
       throw new Error("Plus de hizb disponibles pour cette taille");
     }
-    const created = await joinGroup(
-      group.value.id,
-      displayName.value.trim(),
-      Number(hizbTaken.value),
-      slot.start,
-      slot.end
-    );
-    localStorage.setItem(
-      `selka:${group.value.join_code}:participation`,
-      JSON.stringify({
-        participationId: created.id,
-        editToken: created.edit_token,
-      })
-    );
-    localStorage.setItem(
-      `selka:${group.value.join_code}:display_name`,
-      displayName.value.trim()
-    );
-    localParticipation.value = {
-      participationId: created.id,
-      editToken: created.edit_token,
-    };
-    displayName.value = "";
-    hizbTaken.value = "1";
-    participations.value = await listParticipations(group.value.id);
-    readPromptRange.value = { start: slot.start, end: slot.end };
-    showReadPrompt.value = true;
+    await doJoinWithSlot(slot);
     await maybeFinishGroup();
   } catch (err) {
     error.value =
@@ -264,6 +311,32 @@ async function maybeFinishGroup() {
   }
 }
 
+async function onDeleteMyParticipation() {
+  if (!group.value || !storedParticipation.value || canceling.value) return;
+  const confirmDelete = window.confirm(
+    "Tu veux vraiment supprimer ta part ?"
+  );
+  if (!confirmDelete) return;
+  error.value = "";
+  notice.value = "";
+  canceling.value = true;
+  try {
+    await cancelParticipation(
+      storedParticipation.value.participationId,
+      storedParticipation.value.editToken
+    );
+    localStorage.removeItem(`selka:${group.value.join_code}:participation`);
+    localParticipation.value = null;
+    participations.value = await listParticipations(group.value.id);
+    notice.value = "Part supprimée";
+  } catch (err) {
+    error.value =
+      err?.message || "Impossible de supprimer votre participation.";
+  } finally {
+    canceling.value = false;
+  }
+}
+
 function onReadMyPart() {
   const row = localParticipationRow.value;
   if (!row) {
@@ -311,6 +384,99 @@ function resetLocalParticipation() {
   readPromptRange.value = null;
 }
 
+function onRecognizedRead() {
+  if (!recognized.value || !group.value) return;
+  router.push({
+    path: "/read",
+    query: {
+      hizb_start: recognized.value.start_hizb,
+      hizb_end: recognized.value.end_hizb,
+      code: group.value.join_code,
+    },
+  });
+}
+
+async function onRecognizedJoinAnother() {
+  if (!group.value) return;
+  if (!displayName.value.trim() || !isValidInitial()) {
+    error.value = "Merci de renseigner le prenom et l'initiale.";
+    return;
+  }
+  joining.value = true;
+  error.value = "";
+  notice.value = "";
+  try {
+    const current = await listParticipations(group.value.id);
+    const slot = computeNextSlot(
+      current,
+      Number(hizbTaken.value || 1),
+      group.value.total_hizb || 60
+    );
+    await doJoinWithSlot(slot, "Nouvelle part attribuee.");
+  } catch (err) {
+    error.value =
+      err?.message || "Impossible d'attribuer une nouvelle part.";
+  } finally {
+    joining.value = false;
+  }
+}
+
+function onConfirmMe() {
+  if (!group.value || !confirmMatch.value) return;
+  localStorage.setItem(
+    `selka:recognized:${group.value.join_code}`,
+    JSON.stringify({
+      participationId: confirmMatch.value.id,
+      displayName: confirmMatch.value.display_name,
+      nameInitial: confirmMatch.value.name_initial,
+      start_hizb: confirmMatch.value.start_hizb,
+      end_hizb: confirmMatch.value.end_hizb,
+    })
+  );
+  recognized.value = {
+    participationId: confirmMatch.value.id,
+    displayName: confirmMatch.value.display_name,
+    nameInitial: confirmMatch.value.name_initial,
+    start_hizb: confirmMatch.value.start_hizb,
+    end_hizb: confirmMatch.value.end_hizb,
+  };
+  showConfirm.value = false;
+  router.push({
+    path: "/read",
+    query: {
+      hizb_start: confirmMatch.value.start_hizb,
+      hizb_end: confirmMatch.value.end_hizb,
+      code: group.value.join_code,
+    },
+  });
+}
+
+async function onConfirmJoinAnother() {
+  if (!group.value) return;
+  showConfirm.value = false;
+  joining.value = true;
+  error.value = "";
+  notice.value = "";
+  try {
+    const current = await listParticipations(group.value.id);
+    const slot = computeNextSlot(
+      current,
+      Number(hizbTaken.value),
+      group.value.total_hizb || 60
+    );
+    await doJoinWithSlot(slot, "Nouvelle part attribuee.");
+  } catch (err) {
+    error.value =
+      err?.message || "Impossible d'attribuer une nouvelle part.";
+  } finally {
+    joining.value = false;
+  }
+}
+
+function onConfirmCancel() {
+  showConfirm.value = false;
+}
+
 onMounted(loadGroupAndParticipations);
 watch(code, () => {
   loadGroupAndParticipations();
@@ -322,6 +488,7 @@ watch(code, () => {
     <section class="card">
       <p v-if="loading" class="muted">Chargement...</p>
       <p v-if="error" class="error">{{ error }}</p>
+      <p v-if="notice" class="notice">{{ notice }}</p>
       <div v-if="notFound" class="landing">
         <h2 class="landing-title">Cette selka a expiré ou n'existe pas</h2>
         <button class="primary" type="button" @click="router.push('/')">
@@ -336,6 +503,21 @@ watch(code, () => {
           </button>
         </div>
         <h1 class="title">{{ group.name }}</h1>
+
+        <div v-if="recognized" class="recognized">
+          <p class="recognized-title">
+            Vous avez deja Hizb {{ recognized.start_hizb }}-{{ recognized.end_hizb
+            }} a lire. Continuer la lecture ?
+          </p>
+          <div class="actions">
+            <button class="secondary brown" type="button" @click="onRecognizedRead">
+              Lire ma part
+            </button>
+            <button class="secondary ghost" type="button" @click="onRecognizedJoinAnother">
+              Je veux une autre part
+            </button>
+          </div>
+        </div>
 
         <div class="progress">
           <div>
@@ -381,6 +563,18 @@ watch(code, () => {
             />
           </div>
           <div class="form-row">
+            <label class="label" for="nameInitial">Initiale de votre nom</label>
+            <input
+              id="nameInitial"
+              v-model="nameInitial"
+              class="input"
+              type="text"
+              maxlength="3"
+              placeholder="A"
+              :disabled="joining"
+            />
+          </div>
+          <div class="form-row">
             <label class="label" for="hizbTaken">Je prends</label>
             <select
               id="hizbTaken"
@@ -395,7 +589,12 @@ watch(code, () => {
           <button
             class="primary"
             type="button"
-            :disabled="joining || !displayName.trim() || !hizbTaken"
+            :disabled="
+              joining ||
+              !displayName.trim() ||
+              !hizbTaken ||
+              !isValidInitial()
+            "
             @click="onJoin"
           >
             {{ joining ? "En cours..." : "Je prends cette part" }}
@@ -451,16 +650,52 @@ watch(code, () => {
           <div v-if="participations.length" class="list">
             <div v-for="p in participations" :key="p.id" class="item">
               <div class="item-main">
-                <strong>{{ p.display_name }}</strong>
+                <strong>{{ p.display_name }} {{ p.name_initial }}</strong>
                 <span class="muted">{{ rangeLabel(p) }}</span>
               </div>
-              <span :class="p.completed ? 'badge ok' : 'badge'">
-                {{ p.completed ? "✔ termine" : "⏳ en cours" }}
-              </span>
-            </div>
+            <button
+              v-if="
+                storedParticipation &&
+                String(p.id) === String(storedParticipation.participationId)
+              "
+              class="delete-x"
+              type="button"
+              :disabled="canceling"
+              aria-label="Supprimer ma part"
+              @click="onDeleteMyParticipation"
+            >
+              ×
+            </button>
+            <span :class="p.completed ? 'badge ok' : 'badge'">
+              {{ p.completed ? "✔ termine" : "⏳ en cours" }}
+            </span>
+          </div>
           </div>
           <p v-else class="muted">Aucune participation pour le moment.</p>
         </section>
+      </div>
+
+      <div v-if="showConfirm" class="modal">
+        <div class="modal-card">
+          <h2 class="subtitle">
+            {{ confirmMatch?.display_name }} {{ confirmMatch?.name_initial }} a
+            deja participe, est-ce que c'est vous ?
+          </h2>
+          <p class="muted">
+            Part attribuee: Hizb {{ confirmMatch?.start_hizb }}-{{
+              confirmMatch?.end_hizb
+            }}
+          </p>
+          <p class="muted" v-if="confirmMatch && confirmMatch.completed">
+            Votre part est deja marquee terminee.
+          </p>
+          <div class="actions">
+            <button class="secondary" type="button" @click="onConfirmCancel">
+              Annuler
+            </button>
+          </div>
+          <p class="muted">Modifiez votre initiale pour vous differencier.</p>
+        </div>
       </div>
     </section>
   </main>
@@ -590,6 +825,16 @@ watch(code, () => {
   align-items: center;
 }
 
+.delete-x {
+  margin-left: auto;
+  border: none;
+  background: transparent;
+  color: #8a2d2d;
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+}
+
 .prompt {
   margin-bottom: 14px;
   padding: 12px;
@@ -691,5 +936,47 @@ watch(code, () => {
   margin: 12px 0 0;
   color: #b42318;
   font-size: 14px;
+}
+
+.notice {
+  margin: 12px 0 0;
+  color: #1e6f3c;
+  font-size: 14px;
+}
+
+.recognized {
+  margin-bottom: 16px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--paper-strong);
+  display: grid;
+  gap: 10px;
+}
+
+.recognized-title {
+  margin: 0;
+  font-weight: 600;
+}
+
+.modal {
+  position: fixed;
+  inset: 0;
+  background: rgba(10, 10, 10, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  z-index: 10;
+}
+
+.modal-card {
+  width: min(520px, 100%);
+  background: var(--paper);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 18px;
+  display: grid;
+  gap: 10px;
 }
 </style>
