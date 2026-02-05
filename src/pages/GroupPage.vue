@@ -23,6 +23,8 @@ const hizbTaken = ref("1");
 const joining = ref(false);
 const completing = ref(false);
 const finishing = ref(false);
+const showReadPrompt = ref(false);
+const readPromptRange = ref(null);
 
 const code = computed(() => String(route.params.code || "").trim());
 
@@ -114,6 +116,16 @@ const hasCompletedLocal = computed(() => {
   return Boolean(row && row.completed);
 });
 
+const localParticipationRow = computed(() => {
+  const stored = storedParticipation.value;
+  if (!stored?.participationId) return null;
+  return (
+    participations.value.find(
+      (p) => String(p.id) === String(stored.participationId)
+    ) || null
+  );
+});
+
 async function loadGroupAndParticipations() {
   if (!code.value) return;
   loading.value = true;
@@ -179,6 +191,10 @@ async function onJoin() {
         editToken: created.edit_token,
       })
     );
+    localStorage.setItem(
+      `selka:${group.value.join_code}:display_name`,
+      displayName.value.trim()
+    );
     localParticipation.value = {
       participationId: created.id,
       editToken: created.edit_token,
@@ -186,6 +202,8 @@ async function onJoin() {
     displayName.value = "";
     hizbTaken.value = "1";
     participations.value = await listParticipations(group.value.id);
+    readPromptRange.value = { start: slot.start, end: slot.end };
+    showReadPrompt.value = true;
     await maybeFinishGroup();
   } catch (err) {
     error.value =
@@ -246,10 +264,51 @@ async function maybeFinishGroup() {
   }
 }
 
+function onReadMyPart() {
+  const row = localParticipationRow.value;
+  if (!row) {
+    error.value = "Participation introuvable pour la lecture.";
+    return;
+  }
+  const start = Number(row.start_hizb);
+  const end = Number(row.end_hizb);
+  if (!Number.isFinite(start) || !Number.isFinite(end)) {
+    error.value = "Plage de hizb invalide pour la lecture.";
+    return;
+  }
+  router.push({
+    path: "/read",
+    query: { hizb_start: start, hizb_end: end, code: group.value.join_code },
+  });
+}
+
+function onReadNow() {
+  const range = readPromptRange.value;
+  if (!range || !group.value?.join_code) return;
+  router.push({
+    path: "/read",
+    query: {
+      hizb_start: range.start,
+      hizb_end: range.end,
+      code: group.value.join_code,
+    },
+  });
+}
+
+function dismissReadPrompt() {
+  showReadPrompt.value = false;
+}
+
 function resetLocalParticipation() {
   if (!group.value?.join_code) return;
   localStorage.removeItem(`selka:${group.value.join_code}:participation`);
+  const savedName = localStorage.getItem(
+    `selka:${group.value.join_code}:display_name`
+  );
+  displayName.value = savedName || displayName.value;
   localParticipation.value = null;
+  showReadPrompt.value = false;
+  readPromptRange.value = null;
 }
 
 onMounted(loadGroupAndParticipations);
@@ -325,14 +384,23 @@ watch(code, () => {
 
         <section v-if="!isGroupFinished && hasLocalParticipation" class="section">
           <h2 class="subtitle">Merci de votre participation</h2>
+          <div v-if="showReadPrompt" class="prompt">
+            <p class="prompt-title">Lire maintenant votre part ?</p>
+            <button class="primary" type="button" @click="onReadNow">
+              Oui, lire maintenant
+            </button>
+            <button class="secondary ghost" type="button" @click="dismissReadPrompt">
+              Apres, je lirai plus tard
+            </button>
+          </div>
           <div class="actions">
             <button
               class="secondary brown"
               type="button"
-              :disabled="completing || !canComplete"
-              @click="onComplete"
+              :disabled="hasCompletedLocal"
+              @click="onReadMyPart"
             >
-              {{ completing ? "Mise a jour..." : "J'ai termine ma part" }}
+              {{ hasCompletedLocal ? "Part terminee" : "Lire ma part" }}
             </button>
             <button
               class="secondary ghost"
@@ -472,6 +540,21 @@ watch(code, () => {
   display: flex;
   gap: 12px;
   align-items: center;
+}
+
+.prompt {
+  margin-bottom: 14px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--paper-strong);
+  display: grid;
+  gap: 10px;
+}
+
+.prompt-title {
+  margin: 0;
+  font-weight: 600;
 }
 
 .actions {
